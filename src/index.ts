@@ -1,77 +1,110 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { env } from "cloudflare:workers";
+
+type State = {};
+type Props = {
+  username: string;
+};
 
 // Define our MCP agent with tools
-export class MyMCP extends McpAgent {
-	server = new McpServer({
-		name: "Authless Calculator",
-		version: "1.0.0",
-	});
 
-	async init() {
-		// Simple addition tool
-		this.server.tool(
-			"add",
-			{ a: z.number(), b: z.number() },
-			async ({ a, b }) => ({
-				content: [{ type: "text", text: String(a + b) }],
-			})
-		);
+export class MyMCP extends McpAgent<Env, State, Props> {
+  server = new McpServer({
+    name: "Authless Whoa",
+    version: "1.0.0",
+  });
 
-		// Calculator tool with multiple operations
-		this.server.tool(
-			"calculate",
-			{
-				operation: z.enum(["add", "subtract", "multiply", "divide"]),
-				a: z.number(),
-				b: z.number(),
-			},
-			async ({ operation, a, b }) => {
-				let result: number;
-				switch (operation) {
-					case "add":
-						result = a + b;
-						break;
-					case "subtract":
-						result = a - b;
-						break;
-					case "multiply":
-						result = a * b;
-						break;
-					case "divide":
-						if (b === 0)
-							return {
-								content: [
-									{
-										type: "text",
-										text: "Error: Cannot divide by zero",
-									},
-								],
-							};
-						result = a / b;
-						break;
-				}
-				return { content: [{ type: "text", text: String(result) }] };
-			}
-		);
-	}
+  async init() {
+    this.server.tool("whoAmI", {}, async () => {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Your username is ${this.props.username}`,
+          },
+        ],
+      };
+    });
+    this.server.tool(
+      "trackWhoa",
+      {
+        reason: z
+          .string({
+            description:
+              "Summary of the context why the user responded with whoa",
+          })
+          .default("Probably some AI stuff"),
+      },
+      async ({ reason }) => {
+        await env.DB.prepare(
+          `INSERT INTO whoas (username, whoa_reason) VALUES (?, ?)`
+        )
+          .bind(this.props.username, reason)
+          .run();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${this.props.username} said whoa and it was tracked`,
+            },
+          ],
+        };
+      }
+    );
+
+    this.server.tool(
+      "reportWhoaCount",
+      {
+        username: z
+          .string({ description: "User that we should count the whoas for" })
+          .default(this.props.username),
+      },
+      async ({ username }) => {
+        const { results } = await env.DB.prepare(
+          `SELECT count(*) AS whoa_count FROM whoas WHERE username=?`
+        )
+          .bind(username)
+          .all();
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${username} said whoa ${results[0].whoa_count} times`,
+            },
+          ],
+        };
+      }
+    );
+  }
 }
 
 export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext) {
-		const url = new URL(request.url);
+  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const url = new URL(request.url);
 
-		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-			// @ts-ignore
-			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
-		}
+    const username = request.headers.get("x-whoa-username");
+    if (!username) {
+      return new Response("Whoa there, missing X-Whoa-Username header", {
+        status: 401,
+      });
+    }
 
-		if (url.pathname === "/mcp") {
-			// @ts-ignore
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
-		}
+    ctx.props = {
+      username: username.toLowerCase(),
+    };
 
-		return new Response("Not found", { status: 404 });
-	},
+    if (url.pathname === "/sse" || url.pathname === "/sse/message") {
+      // @ts-ignore
+      return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
+    }
+
+    if (url.pathname === "/mcp") {
+      // @ts-ignore
+      return MyMCP.serve("/mcp").fetch(request, env, ctx);
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
 };

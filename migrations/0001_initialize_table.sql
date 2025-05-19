@@ -1,0 +1,7 @@
+-- Migration number: 0001 	 2025-05-16T22:00:45.784Z
+CREATE TABLE whoas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    whoa_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
